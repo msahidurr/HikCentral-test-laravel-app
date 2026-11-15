@@ -8,36 +8,52 @@ use RuntimeException;
 
 class HikCentralClient
 {
-    public function post(string $uri, array $payload = [])
+    protected string $baseUrl;
+    protected string $appKey;
+    protected string $appSecret;
+
+    public function __construct()
+    {
+        $this->baseUrl = rtrim(config('services.hikcentral.base_url'), '/');
+
+        $this->appKey = config('services.hikcentral.app_key');
+        $this->appSecret = config('services.hikcentral.app_secret');
+
+        if (!$this->baseUrl || !$this->appKey || !$this->appSecret) {
+            throw new RuntimeException(
+                'HikCentral configuration is incomplete.'
+            );
+        }
+    }
+
+    public function post(string $uri, array $payload = []): array
     {
         $method = 'POST';
-        $accept = 'application/json';
+        $accept = '*/*';
         $contentType = 'application/json;charset=UTF-8';
+        $date = gmdate('D, d M Y H:i:s') . ' GMT';
 
+        // Keep the exact same body for MD5, signing and HTTP request.
         $body = json_encode(
             $payload,
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         );
 
         if ($body === false) {
-            throw new RuntimeException('JSON encoding failed.');
+            throw new RuntimeException('Unable to encode request JSON.');
         }
 
-        $key = config('hikcentral.app_key');
-        $secret = config('hikcentral.app_secret');
-
-        $nonce = (string) Str::uuid();
-        $timestamp = (string) round(microtime(true) * 1000);
+        $contentMd5 = base64_encode(md5($body, true));
 
         $signedHeaders = [
-            'x-ca-key' => $key,
-            'x-ca-nonce' => $nonce,
-            'x-ca-timestamp' => $timestamp,
+            'x-ca-key' => $this->appKey,
+            'x-ca-nonce' => (string) Str::uuid(),
+            'x-ca-timestamp' => (string) round(microtime(true) * 1000),
         ];
 
         ksort($signedHeaders);
 
-        $signatureHeaders = implode(
+        $signatureHeaderNames = implode(
             ',',
             array_keys($signedHeaders)
         );
@@ -51,9 +67,9 @@ class HikCentralClient
         $stringToSign =
             $method . "\n" .
             $accept . "\n" .
-            "\n" .
+            $contentMd5 . "\n" .
             $contentType . "\n" .
-            "\n" .
+            $date . "\n" .
             $canonicalHeaders .
             $uri;
 
@@ -61,7 +77,7 @@ class HikCentralClient
             hash_hmac(
                 'sha256',
                 $stringToSign,
-                $secret,
+                $this->appSecret,
                 true
             )
         );
@@ -69,26 +85,21 @@ class HikCentralClient
         $headers = [
             'Accept' => $accept,
             'Content-Type' => $contentType,
-            'x-ca-key' => $key,
-            'x-ca-nonce' => $nonce,
-            'x-ca-timestamp' => $timestamp,
-            'x-ca-signature-headers' => $signatureHeaders,
-            'x-ca-signature' => $signature,
+            'Content-MD5' => $contentMd5,
+            'Date' => $date,
+            'X-Ca-Key' => $this->appKey,
+            'X-Ca-Nonce' => $signedHeaders['x-ca-nonce'],
+            'X-Ca-Timestamp' => $signedHeaders['x-ca-timestamp'],
+            'X-Ca-Signature-Headers' => $signatureHeaderNames,
+            'X-Ca-Signature' => $signature,
         ];
 
-        if (config('hikcentral.user_id')) {
-            $headers['userId'] = config('hikcentral.user_id');
-        }
-
-        $baseUrl = rtrim(
-            config('hikcentral.base_url'),
-            '/'
-        );
-
-        $response = Http::withHeaders($headers)
+        $response = Http::timeout(
+            (int) config('services.hikcentral.timeout', 30)
+        )
+            ->withHeaders($headers)
             ->withBody($body, $contentType)
-            ->timeout(60)
-            ->post($baseUrl . $uri);
+            ->post($this->baseUrl . $uri);
 
         if (!$response->successful()) {
             throw new RuntimeException(
@@ -102,14 +113,15 @@ class HikCentralClient
 
         if (!is_array($result)) {
             throw new RuntimeException(
-                'Invalid HikCentral JSON response.'
+                'Invalid JSON response from HikCentral.'
             );
         }
 
         if ((string) ($result['code'] ?? '') !== '0') {
             throw new RuntimeException(
                 'HikCentral API error: ' .
-                ($result['msg'] ?? 'Unknown error')
+                ($result['msg'] ?? 'Unknown error') .
+                ' Code: ' . ($result['code'] ?? 'Unknown')
             );
         }
 

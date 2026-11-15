@@ -15,14 +15,13 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        $schedule->command('hikcentral:sync-punches')
-            ->everyMinute()
-            ->withoutOverlapping();
+        // $schedule->command('hikcentral:sync-employees')
+        //     ->hourly()
+        //     ->withoutOverlapping();
 
-        $schedule->command('hikcentral:sync-attendance')
-            ->dailyAt('02:00')
-            ->timezone('Asia/Dhaka')
-            ->withoutOverlapping();
+        // $schedule->command('hikcentral:sync-events')
+        //     ->everyFiveMinutes()
+        //     ->withoutOverlapping();
     }
 
     /**
